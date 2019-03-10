@@ -1,0 +1,10 @@
+Install pumpd's supervisord configuration
+
+sudo sh -c 'cat > /etc/supervisor/conf.d/pumpd.conf << EOF
+[program:pumpd]
+command = /home/pi/.virtualenvs/pumpd/bin/python app.py
+directory = /home/pi/pumpd
+autostart = true
+user = pi
+group = pi
+EOF'

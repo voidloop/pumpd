@@ -1,9 +1,13 @@
 from aiohttp import web
+from aiohttp.log import access_logger
 from RPi import GPIO
 from water import Pump, FloatSwitch
 import asyncio
 import automationhat
 import socketio
+import sys
+import logging
+
 
 if not automationhat.is_automation_hat():
     raise RuntimeError("Automation HAT is not connected")
@@ -11,6 +15,7 @@ if not automationhat.is_automation_hat():
 sio = socketio.AsyncServer(async_mode='aiohttp')
 switch = FloatSwitch(gpio=20)
 pump = Pump(sio, relay=automationhat.relay.one)
+logger = logging.getLogger('pumpd')
 
 
 @sio.on('pump start')
@@ -19,6 +24,11 @@ async def start_pump(sid):
         await pump.start()
     else:
         await sio.emit('no water')
+
+
+@sio.on('connect')
+async def connect(sid, environ):
+    logger.info('connect {}'.format(sid))
 
 
 def init_gpio_cb():
@@ -36,9 +46,20 @@ def init_gpio_cb():
     GPIO.add_event_detect(switch.gpio, GPIO.BOTH, callback=switch_cb)
 
 
+def init_logging():
+    handler = logging.StreamHandler(sys.stdout)
+    logger.setLevel(logging.INFO)
+    access_logger.setLevel(logging.INFO)
+
+    logger.addHandler(handler)
+    access_logger.addHandler(handler)
+
+
 def main():
-    app = web.Application()
     init_gpio_cb()
+    init_logging()
+
+    app = web.Application()
     sio.attach(app)
     web.run_app(app, port=5000)
 
