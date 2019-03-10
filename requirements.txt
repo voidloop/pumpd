@@ -1,0 +1,4 @@
+aiohttp==1.2.0
+automationhat==0.1.0
+python-socketio==4.0.0
+RPi.GPIO==0.6.5
