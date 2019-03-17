@@ -1,64 +1,115 @@
 from aiohttp import web
-from aiohttp.log import access_logger
+from log_utils import logger
 from RPi import GPIO
-from water import Pump, FloatSwitch
+from water import Pump, FloatSwitch, AbstractPumpContext
 import asyncio
 import automationhat
 import socketio
-import sys
-import logging
-
 
 if not automationhat.is_automation_hat():
     raise RuntimeError("Automation HAT is not connected")
 
 sio = socketio.AsyncServer(async_mode='aiohttp')
+
+
+class PumpContext(AbstractPumpContext):
+    def __init__(self):
+        super().__init__()
+        self.relay = automationhat.relay.one
+
+    async def activate(self):
+        self.relay.on()
+        logger.info('emit (broadcast): pump_started')
+        await sio.emit('pump_started')
+
+    async def deactivate(self):
+        self.relay.off()
+        logger.info('emit (broadcast): pump_stopped')
+        await sio.emit('pump_stopped')
+
+
 switch = FloatSwitch(gpio=20)
-pump = Pump(sio, relay=automationhat.relay.one)
-logger = logging.getLogger('pumpd')
+pump = Pump(PumpContext())
 
 
-@sio.on('pump start')
-async def start_pump(sid):
+@sio.on('pump_start')
+async def on_pump_start(sid, data):
+
+    async def error(msg):
+        logger.warn(msg)
+        await sio.emit('error', data=msg, room=sid)
+
+    try:
+        seconds = int(data['seconds'])
+        logger.info('event (sid=%s): pump_start (%d %s)', sid, seconds, 'second' if seconds == 1 else 'seconds')
+        if seconds < 0:
+            await error('a negative value for "seconds" parameter is not allowed (seconds={})'.format(seconds))
+            return
+    except (TypeError, ValueError):
+        if data['seconds'] is None:
+            logger.info('event (sid=%s): pump_start (client has not specified how many seconds)', sid)
+            seconds = None
+        else:
+            await error('"seconds" parameter must be an integer (seconds={})'.format(data['seconds']))
+            return
+    except KeyError:
+        seconds = None
+
     if switch.is_high():
-        await pump.start()
+        await pump.start(seconds=seconds)
     else:
-        await sio.emit('no water')
+        logger.info('emit (sid=%s): no_water', sid)
+        await sio.emit('no_water', room=sid)
+
+
+@sio.on('pump_stop')
+async def on_pump_stop(sid):
+    logger.info('event (sid=%s): pump_stop', sid)
+    await pump.stop()
 
 
 @sio.on('connect')
-async def connect(sid, environ):
-    logger.info('connect {}'.format(sid))
+async def on_connect(sid, environ):
+    logger.info('event (sid=%s): connect (%s)', sid, environ['REMOTE_ADDR'])
 
 
-def init_gpio_cb():
+@sio.on('client_ready')
+async def on_client_ready(sid):
+    logger.info('event (sid=%s): client_ready', sid)
+    data = {
+        'water': 'high' if switch.is_high() else 'low',
+        'pump': 'running' if pump.is_running else 'stop'
+    }
+
+    await sio.emit('server_ready', data, room=sid)
+    logger.info('emit (sid={}): server_ready, data={}'.format(sid, data))
+
+
+def install_interrupts():
     loop = asyncio.get_event_loop()
+
+    async def low():
+        logger.info('emit (broadcast): no_water')
+        await sio.emit('no_water')
+        await pump.stop()
+
+    async def high():
+        logger.info('emit (broadcast): water_ok')
+        await sio.emit('water_ok')
 
     def switch_cb(_):
         if switch.is_low():
-            asyncio.run_coroutine_threadsafe(pump.stop(), loop)
-            asyncio.run_coroutine_threadsafe(sio.emit('no water'), loop)
+            asyncio.run_coroutine_threadsafe(low(), loop)
             automationhat.light.warn.on()
         else:
-            asyncio.run_coroutine_threadsafe(sio.emit('water ok'), loop)
+            asyncio.run_coroutine_threadsafe(high(), loop)
             automationhat.light.warn.off()
 
     GPIO.add_event_detect(switch.gpio, GPIO.BOTH, callback=switch_cb)
 
 
-def init_logging():
-    handler = logging.StreamHandler(sys.stdout)
-    logger.setLevel(logging.INFO)
-    access_logger.setLevel(logging.INFO)
-
-    logger.addHandler(handler)
-    access_logger.addHandler(handler)
-
-
 def main():
-    init_gpio_cb()
-    init_logging()
-
+    install_interrupts()
     app = web.Application()
     sio.attach(app)
     web.run_app(app, port=5000)
