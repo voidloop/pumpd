@@ -19,14 +19,12 @@ class Pump:
         self._relay = relay
 
     def on(self):
-        self._relay.on()
         automationhat.light.power.on()
-        print('PUMP ON')
+        self._relay.on()
 
     def off(self):
-        self._relay.off()
         automationhat.light.power.off()
-        print('PUMP OFF')
+        self._relay.off()
 
 
 class Sensor:
@@ -107,7 +105,7 @@ class Sprinkler:
 
     def run(self):
         logger.info('sprinkler started')
-        self._idle()
+        self._start()
 
 
 def main():
