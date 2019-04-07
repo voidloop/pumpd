@@ -8,8 +8,8 @@ if not automationhat.is_automation_hat():
     raise RuntimeError("Automation HAT is not connected")
 
 
-PUMPD_INTERVAL = os.environ.get('PUMPD_INTERVAL', 3600)
-PUMPD_SECONDS = os.environ.get('PUMPD_SECONDS', 30)
+IDLE_TIME = os.environ.get('IDLE_TIME', 3600)
+WATERING_TIME = os.environ.get('WATERING_TIME', 15)
 
 
 class Pump:
@@ -49,8 +49,8 @@ class Sprinkler:
         self._pump = Pump()
         self._sensor = Sensor()
         self._loop = loop
-        self._interval = PUMPD_INTERVAL
-        self._seconds = PUMPD_SECONDS
+        self._interval = IDLE_TIME
+        self._seconds = WATERING_TIME
         self._done = asyncio.Event()
 
     def _start(self):
