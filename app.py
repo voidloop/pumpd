@@ -3,23 +3,23 @@ from hardware import Sprinkler
 from log_utils import logger
 import asyncio
 
-sprinkler = Sprinkler()
-
-
-def tick():
-    sprinkler.start(10)
-
 
 if __name__ == '__main__':
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(tick, 'interval', hours=1)
+    loop = asyncio.get_event_loop()
+    sprinkler = Sprinkler(event_loop=loop)
+
+    def tick():
+        sprinkler.start(10)
+
+    scheduler = AsyncIOScheduler(event_loop=loop)
+    scheduler.add_job(tick, 'interval', seconds=20)
     scheduler.start()
-    logger.info('scheduler started')
+    logger.info('Scheduler started')
 
     try:
-        asyncio.get_event_loop().run_forever()
+        loop.run_forever()
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        logger.info('scheduler stopped')
+        logger.info('Scheduler stopped')
 

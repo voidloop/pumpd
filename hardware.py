@@ -1,3 +1,5 @@
+from abc import ABC, abstractmethod
+from enum import Enum
 from log_utils import logger
 from RPi import GPIO
 import automationhat
@@ -22,11 +24,19 @@ class Pump:
         self._relay.off()
 
 
+class SensorEvent(Enum):
+    RISING = 1
+    FALLING = 2
+
+
 class Sensor:
+    _events = {
+        SensorEvent.RISING: GPIO.RISING,
+        SensorEvent.FALLING: GPIO.FALLING
+    }
+
     def __init__(self, gpio=20):
         self.gpio = gpio
-
-        GPIO.setmode(GPIO.BCM)
         GPIO.setup(gpio, GPIO.IN)
 
     def is_low(self):
@@ -38,6 +48,16 @@ class Sensor:
     def _read(self):
         return GPIO.input(self.gpio)
 
+    def add_event_detect(self, event: SensorEvent, callback):
+        GPIO.add_event_detect(
+            self.gpio,
+            self._events[event],
+            bouncetime=500,
+            callback=callback)
+
+    def remove_event_detect(self):
+        GPIO.remove_event_detect(self.gpio)
+
 
 class Context:
     def __init__(self, loop: asyncio.AbstractEventLoop):
@@ -46,8 +66,12 @@ class Context:
         self.pump = Pump()
         self.sensor = Sensor()
 
+    def transition_to(self, state):
+        logger.info('State transition: {} -> {}'.format(self.state, state))
+        self.state = state
 
-class State:
+
+class State(ABC):
     def __init__(self, context: Context):
         self._context = context
 
@@ -57,82 +81,103 @@ class State:
     def stop(self):
         pass
 
+    @abstractmethod
+    def __str__(self):
+        pass
+
 
 class IdleState(State):
+    def __init__(self, context):
+        super().__init__(context)
+        self._blink_handler = context.loop.call_later(1, self._blink_on)
+
     def start(self, seconds):
         if self._context.sensor.is_high():
-            logger.info('changing state: idle -> running (%ds)', seconds)
-            self._context.state = RunningState(self._context, seconds)
+            self._blink_handler.cancel()
+            automationhat.light.power.off()
+            self._context.transition_to(RunningState(self._context, seconds))
         else:
-            logger.info('error: the water tank is empty')
+            logger.info('The water tank is empty!')
+
+    def _blink_on(self):
+        automationhat.light.power.write(0.5)
+        self._blink_handler = self._context.loop.call_later(0.2, self._blink_off)
+
+    def _blink_off(self):
+        automationhat.light.power.off()
+        self._blink_handler = self._context.loop.call_later(4.8, self._blink_on)
+
+    def __str__(self):
+        return 'IDLE'
 
 
 class RunningState(State):
     def __init__(self, context, seconds):
         super().__init__(context)
+        loop = self._context.loop
         self._context.pump.on()
-        self._start_time = self._context.loop.time()
+        self._start_time = loop.time()
         self._seconds = seconds
-        self._handler = self._context.loop.call_later(seconds, self._normal_stop)
-
-        GPIO.add_event_detect(
-            self._context.sensor.gpio, GPIO.RISING, bouncetime=500,
-            callback=lambda _:
-                self._context.loop.call_soon_threadsafe(self._empty))
+        self._handler = loop.call_later(seconds, self._normal_stop)
+        self._context.sensor.add_event_detect(
+            event=SensorEvent.RISING,
+            callback=lambda _: loop.call_soon_threadsafe(self._empty))
 
     def stop(self):
         self._handler.cancel()
         self._normal_stop()
 
     def _normal_stop(self):
-        logger.info('changing state: running -> idle')
         self._pump_off()
-        self._context.state = IdleState(self._context)
+        self._context.transition_to(IdleState(self._context))
 
     def _pump_off(self):
         self._context.pump.off()
-        GPIO.remove_event_detect(self._context.sensor.gpio)
+        self._context.sensor.remove_event_detect()
 
     def _empty(self):
-        logger.info('changing state: running -> waiting')
         self._handler.cancel()
         self._pump_off()
         automationhat.light.warn.on()
         elapsed = self._context.loop.time() - self._start_time
-        self._context.state = WaitingState(self._context, self._seconds - elapsed)
+        self._context.transition_to(WaitingState(self._context, self._seconds - elapsed))
+
+    def __str__(self):
+        return 'RUNNING ({}s)'.format(self._seconds)
 
 
 class WaitingState(State):
     def __init__(self, context, remaining):
         super().__init__(context)
+        loop = self._context.loop
         self._remaining = remaining
-
-        GPIO.add_event_detect(
-            self._context.sensor.gpio, GPIO.FALLING, bouncetime=500,
-            callback=lambda _:
-                self._context.loop.call_soon_threadsafe(self._refilled))
+        self._context.sensor.add_event_detect(
+            event=SensorEvent.FALLING,
+            callback=lambda _: loop.call_soon_threadsafe(self._refilled))
 
     def _refilled(self):
-        logger.info('changing state: waiting -> running (%ds)', self._remaining)
-        GPIO.remove_event_detect(self._context.sensor.gpio)
+        self._context.sensor.remove_event_detect()
         automationhat.light.warn.off()
-        self._context.state = RunningState(self._context, self._remaining)
+        self._context.transition_to(RunningState(self._context, self._remaining))
 
     def stop(self):
-        logger.info('changing state: waiting -> idle')
-        GPIO.remove_event_detect(self._context.sensor.gpio)
+        self._context.sensor.remove_event_detect()
         automationhat.light.warn.off()
-        self._context.state = IdleState(self._context)
+        self._context.transition_to(IdleState(self._context))
 
     def start(self, seconds):
-        logger.info('no water')
+        logger.info('No water!')
+
+    def __str__(self):
+        return 'WAITING (remaining={}s)'.format(self._remaining)
 
 
 class Sprinkler:
-    def __init__(self, loop=None):
-        if not loop:
-            loop = asyncio.get_event_loop()
-        self._context = Context(loop)
+    def __init__(self, event_loop=None):
+        if not event_loop:
+            event_loop = asyncio.get_event_loop()
+        self._context = Context(event_loop)
+        logger.info('Initial state: {}'.format(self._context.state))
 
     def start(self, seconds):
         self._context.state.start(seconds)

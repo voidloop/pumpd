@@ -1,3 +1,4 @@
-automationhat==0.1.0
-RPi.GPIO==0.6.5
+automationhat
+RPi.GPIO
 APScheduler
+smbus
