@@ -131,16 +131,16 @@ class RunningState(State):
         self._pump_off()
         self._context.transition_to(IdleState(self._context))
 
-    def _pump_off(self):
-        self._context.pump.off()
-        self._context.sensor.remove_event_detect()
-
     def _empty(self):
         self._handler.cancel()
         self._pump_off()
         automationhat.light.warn.on()
         elapsed = self._context.loop.time() - self._start_time
         self._context.transition_to(WaitingState(self._context, self._seconds - elapsed))
+
+    def _pump_off(self):
+        self._context.pump.off()
+        self._context.sensor.remove_event_detect()
 
     def __str__(self):
         return 'RUNNING ({}s)'.format(self._seconds)
