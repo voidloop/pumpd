@@ -12,7 +12,7 @@ if __name__ == '__main__':
         sprinkler.start(10)
 
     scheduler = AsyncIOScheduler(event_loop=loop)
-    scheduler.add_job(tick, 'interval', seconds=20)
+    scheduler.add_job(tick, 'interval', hours=1)
     scheduler.start()
     logger.info('Scheduler started')
 
